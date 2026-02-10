@@ -1,0 +1,141 @@
+/*
+===========================================================
+RESEARCH PROJECT OPERATIONS & FINANCIAL DASHBOARD
+Author: Francis Muendo
+Description:
+This SQL script builds an analytics-ready dashboard layer
+for a research project. It tracks:
+
+1. Achieved interviews per day
+2. Achieved interviews per interviewer
+3. Approved vs cancelled interviews
+4. Financial performance:
+   - Total project budget
+   - Accrued wages
+   - Project management fee
+   - Total expenditure
+   - Remaining balance
+
+Designed for use in BI tools (Power BI, Tableau, Metabase).
+===========================================================
+*/
+
+
+/* =========================
+   1. CORE TABLES
+   ========================= */
+
+CREATE TABLE interviewers (
+    interviewer_id INT PRIMARY KEY,
+    interviewer_name VARCHAR(100) NOT NULL
+);
+
+CREATE TABLE interviews (
+    interview_id INT PRIMARY KEY,
+    interviewer_id INT,
+    interview_date DATE,
+    status VARCHAR(20), -- approved, cancelled, pending
+    wage_amount DECIMAL(10,2),
+    FOREIGN KEY (interviewer_id) REFERENCES interviewers(interviewer_id)
+);
+
+CREATE TABLE project_finance (
+    project_id INT PRIMARY KEY,
+    total_budget DECIMAL(12,2),
+    project_management_fee DECIMAL(12,2)
+);
+
+
+/* =========================
+   2. PERFORMANCE DASHBOARD
+   ========================= */
+
+-- Achieved interviews per day
+CREATE VIEW v_interviews_per_day AS
+SELECT 
+    interview_date,
+    COUNT(*) AS achieved_interviews
+FROM interviews
+WHERE status = 'approved'
+GROUP BY interview_date;
+
+
+-- Achieved interviews per interviewer
+CREATE VIEW v_interviews_per_interviewer AS
+SELECT 
+    i.interviewer_name,
+    COUNT(iv.interview_id) AS achieved_interviews
+FROM interviews iv
+JOIN interviewers i
+    ON iv.interviewer_id = i.interviewer_id
+WHERE iv.status = 'approved'
+GROUP BY i.interviewer_name;
+
+
+-- Interview approval status summary
+CREATE VIEW v_interview_status_summary AS
+SELECT 
+    status,
+    COUNT(*) AS total_interviews
+FROM interviews
+GROUP BY status;
+
+
+/* =========================
+   3. FINANCIAL DASHBOARD
+   ========================= */
+
+-- Accrued wages per day (approved but unpaid)
+CREATE VIEW v_accrued_wages_per_day AS
+SELECT 
+    interview_date,
+    SUM(wage_amount) AS accrued_wages
+FROM interviews
+WHERE status = 'approved'
+GROUP BY interview_date;
+
+
+/* =========================
+   4. PROJECT FINANCIAL SUMMARY FUNCTION
+   ========================= */
+
+CREATE OR REPLACE FUNCTION fn_project_financial_dashboard(p_project_id INT)
+RETURNS TABLE (
+    total_project_budget DECIMAL(12,2),
+    accrued_wages DECIMAL(12,2),
+    project_management_fee DECIMAL(12,2),
+    total_expenditure DECIMAL(12,2),
+    project_balance DECIMAL(12,2)
+)
+AS $$
+BEGIN
+    RETURN QUERY
+    SELECT
+        pf.total_budget AS total_project_budget,
+
+        COALESCE(SUM(iv.wage_amount), 0) AS accrued_wages,
+
+        pf.project_management_fee,
+
+        (COALESCE(SUM(iv.wage_amount), 0) + pf.project_management_fee)
+            AS total_expenditure,
+
+        pf.total_budget -
+        (COALESCE(SUM(iv.wage_amount), 0) + pf.project_management_fee)
+            AS project_balance
+
+    FROM project_finance pf
+    LEFT JOIN interviews iv
+        ON iv.status = 'approved'
+    WHERE pf.project_id = p_project_id
+    GROUP BY pf.total_budget, pf.project_management_fee;
+END;
+$$ LANGUAGE plpgsql;
+
+
+/* =========================
+   5. SAMPLE DASHBOARD QUERY
+   ========================= */
+
+-- Example usage:
+-- SELECT * FROM fn_project_financial_dashboard(1);
